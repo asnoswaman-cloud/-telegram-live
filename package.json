@@ -1,0 +1,13 @@
+{
+  "name": "dark-bot",
+  "version": "1.0.0",
+  "description": "Telegram Facebook Streaming Bot",
+  "type": "module",
+  "main": "main.js",
+  "scripts": {
+    "start": "node main.js"
+  },
+  "dependencies": {
+    "node-telegram-bot-api": "^0.66.0"
+  }
+}
