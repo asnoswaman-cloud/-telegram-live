@@ -32,7 +32,7 @@ const FACEBOOK_RTMP =
 // ============================================================
 
 const IMAGE_URL =
-    "https://yourimageshare.com/ib/tMIVKF0fCw.png";
+    "https://imgbs.com/uploads/bot-03891859.png";
 
 // ============================================================
 // IMAGE SETTINGS
