@@ -1,1822 +1,1092 @@
 import TelegramBot from "node-telegram-bot-api";
-import { spawn, execFile } from "child_process";
 import fs from "fs";
+import path from "path";
+import os from "os";
 import https from "https";
 import http from "http";
-import path from "path";
-import { fileURLToPath } from "url";
+import { spawn } from "child_process";
 
-// ============================================================
-// PATH
-// ============================================================
+// =====================================================
+// 🔐 TELEGRAM TOKEN
+// الأفضل وضعه في Railway Variables
+// =====================================================
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "8938418856:AAHmkAy9CWRzuHmZc4b5bUmqSSZUGSbwUN4";
 
-// ============================================================
-// TELEGRAM TOKEN
-// ============================================================
-
-const TOKEN = process.env.TELEGRAM_TOKEN || "8938418856:AAHmkAy9CWRzuHmZc4b5bUmqSSZUGSbwUN4";
-
-// ============================================================
-// FACEBOOK RTMPS
-// ============================================================
-
-const FACEBOOK_RTMP =
-    "rtmps://live-api-s.facebook.com:443/rtmp/";
-
-// ============================================================
-// IMAGE URL
+// =====================================================
+// 🖼️ IMAGE URL
 // ضع هنا رابط الصورة المباشر
-// ============================================================
+// =====================================================
 
 const IMAGE_URL =
-    "https://imgbs.com/uploads/bot-03891859.png";
+  process.env.IMAGE_URL ||
+  "https://imgbs.com/uploads/bot-03891859.png";
 
-// ============================================================
-// IMAGE SETTINGS
-// ============================================================
+// =====================================================
+// 📺 FACEBOOK RTMPS
+// =====================================================
 
-// عرض الصورة
-const IMAGE_WIDTH = 171;
+const FACEBOOK_URL =
+  process.env.FACEBOOK_URL ||
+  "rtmps://live-api-s.facebook.com:443/rtmp/";
 
-// المسافة من اليمين
-const IMAGE_RIGHT = 75;
+// =====================================================
+// ⚙️ SETTINGS
+// =====================================================
 
-// المسافة من الأعلى
-const IMAGE_TOP = 43;
+const DATA_DIR = path.join(os.tmpdir(), "dark-stream");
+const IMAGE_FILE = path.join(DATA_DIR, "overlay.png");
 
-// ============================================================
-// LOCAL IMAGE
-// ============================================================
+const RESTART_DELAY = 5000;
 
-const IMAGE_FILE =
-    path.join(__dirname, "stream-image.png");
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
 
-// ============================================================
-// STREAMS
-// ============================================================
+// =====================================================
+// ❗ CHECK TOKEN
+// =====================================================
+
+if (!TELEGRAM_TOKEN) {
+  console.error("❌ TELEGRAM_TOKEN غير موجود");
+  process.exit(1);
+}
+
+// =====================================================
+// 🤖 TELEGRAM BOT
+// =====================================================
+
+const bot = new TelegramBot(TELEGRAM_TOKEN, {
+  polling: true
+});
+
+console.log("🤖 DARK STREAM BOT Started");
+
+// =====================================================
+// 📡 STREAMS
+// =====================================================
 
 const streams = new Map();
 
-// ============================================================
-// USER SESSIONS
-// ============================================================
+/*
+stream structure:
 
-const sessions = new Map();
+{
+  id,
+  key,
+  source,
+  process,
+  running,
+  restarting
+}
+*/
 
-// ============================================================
-// CHECK TOKEN
-// ============================================================
+// =====================================================
+// 🖼️ DOWNLOAD IMAGE
+// =====================================================
 
-if (
-    !TOKEN ||
-    TOKEN === "PUT_YOUR_TOKEN_HERE"
-) {
-    console.error(
-        "❌ TELEGRAM_TOKEN غير موجود."
+function downloadFile(url, destination) {
+  return new Promise((resolve, reject) => {
+    const protocol = url.startsWith("https") ? https : http;
+
+    const request = protocol.get(
+      url,
+      {
+        headers: {
+          "User-Agent": "Mozilla/5.0"
+        }
+      },
+      response => {
+
+        // Redirect
+        if (
+          response.statusCode >= 300 &&
+          response.statusCode < 400 &&
+          response.headers.location
+        ) {
+          response.resume();
+
+          return downloadFile(
+            response.headers.location,
+            destination
+          )
+            .then(resolve)
+            .catch(reject);
+        }
+
+        if (response.statusCode !== 200) {
+          response.resume();
+
+          reject(
+            new Error(
+              `HTTP ${response.statusCode}`
+            )
+          );
+
+          return;
+        }
+
+        const file = fs.createWriteStream(destination);
+
+        response.pipe(file);
+
+        file.on("finish", () => {
+          file.close(resolve);
+        });
+
+        file.on("error", err => {
+          file.close();
+          reject(err);
+        });
+      }
     );
 
-    process.exit(1);
+    request.on("error", reject);
+  });
 }
 
-// ============================================================
-// TELEGRAM BOT
-// ============================================================
-
-const bot = new TelegramBot(
-    TOKEN,
-    {
-        polling: true
-    }
-);
-
-console.log("");
-console.log("==============================");
-console.log("🤖 DARK STREAM BOT Started");
-console.log("==============================");
-
-// ============================================================
-// DOWNLOAD IMAGE
-// ============================================================
-
-function downloadImage(url, destination) {
-
-    return new Promise((resolve, reject) => {
-
-        const client =
-            url.startsWith("https://")
-                ? https
-                : http;
-
-        const request =
-            client.get(
-                url,
-                response => {
-
-                    // Redirect
-                    if (
-                        response.statusCode >= 300 &&
-                        response.statusCode < 400 &&
-                        response.headers.location
-                    ) {
-
-                        response.resume();
-
-                        downloadImage(
-                            response.headers.location,
-                            destination
-                        )
-                            .then(resolve)
-                            .catch(reject);
-
-                        return;
-                    }
-
-                    if (
-                        response.statusCode !== 200
-                    ) {
-
-                        response.resume();
-
-                        reject(
-                            new Error(
-                                `HTTP ${response.statusCode}`
-                            )
-                        );
-
-                        return;
-                    }
-
-                    const file =
-                        fs.createWriteStream(
-                            destination
-                        );
-
-                    response.pipe(file);
-
-                    file.on(
-                        "finish",
-                        () => {
-
-                            file.close(
-                                () => resolve(
-                                    destination
-                                )
-                            );
-
-                        }
-                    );
-
-                    file.on(
-                        "error",
-                        error => {
-
-                            try {
-                                file.close();
-                            } catch {}
-
-                            reject(error);
-
-                        }
-                    );
-
-                }
-            );
-
-        request.setTimeout(
-            30000,
-            () => {
-
-                request.destroy(
-                    new Error(
-                        "Image download timeout"
-                    )
-                );
-
-            }
-        );
-
-        request.on(
-            "error",
-            reject
-        );
-
-    });
-}
-
-// ============================================================
-// PREPARE IMAGE
-// ============================================================
+// =====================================================
+// 🖼️ PREPARE IMAGE
+// =====================================================
 
 async function prepareImage() {
+  try {
 
-    try {
+    console.log("🖼️ تحميل الصورة...");
 
-        console.log(
-            "🖼️ جاري تحميل صورة البث..."
-        );
-
-        await downloadImage(
-            IMAGE_URL,
-            IMAGE_FILE
-        );
-
-        if (
-            !fs.existsSync(
-                IMAGE_FILE
-            )
-        ) {
-
-            throw new Error(
-                "الصورة لم يتم تحميلها"
-            );
-        }
-
-        const size =
-            fs.statSync(
-                IMAGE_FILE
-            ).size;
-
-        if (
-            size < 100
-        ) {
-
-            throw new Error(
-                "ملف الصورة فارغ أو غير صالح"
-            );
-        }
-
-        console.log(
-            `✅ تم تحميل الصورة (${size} bytes)`
-        );
-
-        return true;
-
-    } catch (error) {
-
-        console.error(
-            "❌ خطأ تحميل الصورة:",
-            error.message
-        );
-
-        return false;
+    if (fs.existsSync(IMAGE_FILE)) {
+      fs.unlinkSync(IMAGE_FILE);
     }
+
+    await downloadFile(
+      IMAGE_URL,
+      IMAGE_FILE
+    );
+
+    const size = fs.statSync(IMAGE_FILE).size;
+
+    if (size < 100) {
+      throw new Error("الصورة فارغة أو غير صالحة");
+    }
+
+    console.log(
+      `✅ تم تحميل الصورة: ${size} bytes`
+    );
+
+    return true;
+
+  } catch (error) {
+
+    console.error(
+      "❌ فشل تحميل الصورة:",
+      error.message
+    );
+
+    return false;
+  }
 }
 
-// ============================================================
-// KEY MASK
-// ============================================================
+// =====================================================
+// 🔑 CREATE STREAM URL
+// =====================================================
+
+function createStreamUrl(key) {
+
+  if (!key) {
+    throw new Error(
+      "Facebook Stream Key غير موجود"
+    );
+  }
+
+  return `${FACEBOOK_URL}${key}`;
+}
+
+// =====================================================
+// 🎬 BUILD FFMPEG
+// =====================================================
+
+function createFFmpeg(stream) {
+
+  const output = createStreamUrl(
+    stream.key
+  );
+
+  /*
+    الصورة يتم وضعها في الأسفل بالمنتصف.
+
+    scale=640:-1
+    يعني عرض الصورة 640px
+    والارتفاع يحسب تلقائياً.
+
+    x=(main_w-overlay_w)/2
+    = المنتصف تماماً.
+
+    y=main_h-overlay_h-25
+    = أسفل الشاشة مع هامش 25px.
+  */
+
+  const filter = [
+    "[1:v]scale=640:-1,format=rgba,colorchannelmixer=aa=1[logo]",
+    "[0:v][logo]overlay=x=(main_w-overlay_w)/2:y=main_h-overlay_h-25:format=auto[v]"
+  ].join(";");
+
+  const args = [
+
+    // INPUT
+    "-re",
+    "-i",
+    stream.source,
+
+    // IMAGE
+    "-loop",
+    "1",
+    "-i",
+    IMAGE_FILE,
+
+    // VIDEO FILTER
+    "-filter_complex",
+    filter,
+
+    // VIDEO
+    "-map",
+    "[v]",
+
+    // AUDIO
+    "-map",
+    "0:a?",
+
+    "-c:v",
+    "libx264",
+
+    "-preset",
+    "veryfast",
+
+    "-tune",
+    "zerolatency",
+
+    "-pix_fmt",
+    "yuv420p",
+
+    "-r",
+    "30",
+
+    "-g",
+    "60",
+
+    "-b:v",
+    "4000k",
+
+    "-maxrate",
+    "4500k",
+
+    "-bufsize",
+    "9000k",
+
+    // AUDIO
+    "-c:a",
+    "aac",
+
+    "-b:a",
+    "128k",
+
+    "-ar",
+    "44100",
+
+    // FLV
+    "-f",
+    "flv",
+
+    output
+  ];
+
+  // ===================================================
+  // 🔁 MP4 LOOP
+  // ===================================================
+
+  const lower = stream.source.toLowerCase();
+
+  if (
+    lower.endsWith(".mp4") ||
+    lower.includes(".mp4?")
+  ) {
+
+    // remove normal input
+    args.splice(
+      args.indexOf("-re"),
+      2
+    );
+
+    // add loop before input
+    args.unshift(
+      "-stream_loop",
+      "-1",
+      "-re"
+    );
+  }
+
+  return args;
+}
+
+// =====================================================
+// 🚀 START STREAM
+// =====================================================
+
+async function startStream(stream) {
+
+  if (stream.running) {
+    return false;
+  }
+
+  if (!fs.existsSync(IMAGE_FILE)) {
+
+    const imageReady =
+      await prepareImage();
+
+    if (!imageReady) {
+      return false;
+    }
+  }
+
+  let args;
+
+  try {
+
+    args = createFFmpeg(stream);
+
+  } catch (error) {
+
+    console.error(
+      "❌ FFmpeg configuration error:",
+      error.message
+    );
+
+    return false;
+  }
+
+  console.log(
+    `🚀 Starting stream ${stream.id}`
+  );
+
+  const ffmpeg = spawn(
+    "ffmpeg",
+    args,
+    {
+      stdio: [
+        "ignore",
+        "pipe",
+        "pipe"
+      ]
+    }
+  );
+
+  stream.process = ffmpeg;
+  stream.running = true;
+
+  ffmpeg.stdout.on(
+    "data",
+    data => {
+      console.log(
+        `[${stream.id}] ${data}`
+      );
+    }
+  );
+
+  ffmpeg.stderr.on(
+    "data",
+    data => {
+
+      const text =
+        data.toString();
+
+      // FFmpeg outputs almost everything
+      // through stderr.
+
+      if (
+        text.includes("frame=") ||
+        text.includes("speed=")
+      ) {
+        process.stdout.write(
+          `[${stream.id}] ${text}`
+        );
+      }
+    }
+  );
+
+  ffmpeg.on(
+    "error",
+    error => {
+
+      console.error(
+        `[${stream.id}] FFmpeg error:`,
+        error.message
+      );
+
+      stream.running = false;
+      stream.process = null;
+    }
+  );
+
+  ffmpeg.on(
+    "close",
+    code => {
+
+      console.log(
+        `🛑 ${stream.id} FFmpeg stopped. Code: ${code}`
+      );
+
+      stream.running = false;
+      stream.process = null;
+
+      // Automatic restart
+      if (!stream.restarting) {
+
+        stream.restarting = true;
+
+        setTimeout(
+          async () => {
+
+            stream.restarting = false;
+
+            if (!stream.running) {
+              await startStream(stream);
+            }
+
+          },
+          RESTART_DELAY
+        );
+      }
+    }
+  );
+
+  return true;
+}
+
+// =====================================================
+// ⛔ STOP STREAM
+// =====================================================
+
+function stopStream(stream) {
+
+  if (!stream.process) {
+    stream.running = false;
+    return false;
+  }
+
+  console.log(
+    `⛔ Stopping ${stream.id}`
+  );
+
+  stream.restarting = true;
+
+  try {
+
+    stream.process.kill(
+      "SIGTERM"
+    );
+
+  } catch (error) {
+
+    console.error(
+      error.message
+    );
+  }
+
+  stream.process = null;
+  stream.running = false;
+
+  setTimeout(() => {
+    stream.restarting = false;
+  }, 3000);
+
+  return true;
+}
+
+// =====================================================
+// 📊 STATUS
+// =====================================================
+
+function statusText() {
+
+  if (streams.size === 0) {
+    return "📊 لا توجد بثوث.";
+  }
+
+  let text =
+    "📊 حالة البثوث\n\n";
+
+  for (const stream of streams.values()) {
+
+    text +=
+      `📛 ${stream.id}\n`;
+
+    text +=
+      stream.running
+        ? "🟢 RUNNING\n"
+        : "🔴 STOPPED\n";
+
+    text +=
+      `🔑 ${maskKey(stream.key)}\n`;
+
+    text +=
+      `📡 ${stream.source}\n\n`;
+  }
+
+  return text;
+}
+
+// =====================================================
+// 🔒 HIDE KEY
+// =====================================================
 
 function maskKey(key) {
 
-    if (!key) {
-        return "****";
-    }
+  if (!key) {
+    return "غير موجود";
+  }
 
-    if (
-        key.length <= 8
-    ) {
-        return "****";
-    }
+  if (key.length < 8) {
+    return "********";
+  }
 
-    return (
-        key.substring(0, 4) +
-        "****" +
-        key.substring(
-            key.length - 4
-        )
-    );
+  return (
+    key.substring(0, 4) +
+    "****" +
+    key.substring(key.length - 4)
+  );
 }
 
-// ============================================================
-// KEYBOARD
-// ============================================================
+// =====================================================
+// 🎛️ KEYBOARD
+// =====================================================
 
 function keyboard() {
 
-    return {
+  return {
+    reply_markup: {
+      keyboard: [
 
-        reply_markup: {
+        [
+          {
+            text: "🔴 SOLO"
+          },
+          {
+            text: "🔥 GROUP"
+          }
+        ],
 
-            keyboard: [
+        [
+          {
+            text: "📊 الحالة"
+          },
+          {
+            text: "⛔ STOP"
+          }
+        ],
 
-                [
-                    "🎯 SOLO",
-                    "🔥 GROUP"
-                ],
+        [
+          {
+            text: "🔗 تغيير الرابط"
+          }
+        ],
 
-                [
-                    "📊 الحالة",
-                    "🛑 STOP"
-                ],
+        [
+          {
+            text: "🔑 تغيير المفتاح"
+          }
+        ],
 
-                [
-                    "🔍 فحص الرابط"
-                ]
+        [
+          {
+            text: "🎬 تغيير المصدر"
+          }
+        ]
 
-            ],
+      ],
 
-            resize_keyboard: true
-
-        }
-
-    };
-}
-
-// ============================================================
-// IS MP4
-// ============================================================
-
-function isMP4(source) {
-
-    const clean =
-        String(source)
-            .split("?")[0]
-            .split("#")[0];
-
-    return /\.mp4$/i.test(clean);
-}
-
-// ============================================================
-// BUILD FFMPEG ARGS
-// ============================================================
-
-function buildFFmpegArgs(
-    source,
-    streamKey
-) {
-
-    const args = [];
-
-    const mp4 =
-        isMP4(source);
-
-    // ========================================================
-    // MP4 LOOP
-    // ========================================================
-
-    if (mp4) {
-
-        args.push(
-            "-stream_loop",
-            "-1"
-        );
-
+      resize_keyboard: true
     }
-
-    // ========================================================
-    // SOURCE
-    // ========================================================
-
-    args.push(
-        "-re"
-    );
-
-    // Reconnect options
-    // مناسبة للمصادر الشبكية
-
-    if (!mp4) {
-
-        args.push(
-            "-reconnect",
-            "1",
-
-            "-reconnect_streamed",
-            "1",
-
-            "-reconnect_at_eof",
-            "1",
-
-            "-reconnect_delay_max",
-            "10"
-        );
-
-    }
-
-    args.push(
-        "-i",
-        source
-    );
-
-    // ========================================================
-    // IMAGE
-    // ========================================================
-
-    args.push(
-
-        "-loop",
-        "1",
-
-        "-framerate",
-        "30",
-
-        "-i",
-        IMAGE_FILE
-
-    );
-
-    // ========================================================
-    // OVERLAY
-    //
-    // الصورة في أعلى اليمين
-    // ========================================================
-
-    args.push(
-
-        "-filter_complex",
-
-        `[1:v]format=rgba,scale=${IMAGE_WIDTH}:-1[logo];` +
-        `[0:v][logo]overlay=W-w-${IMAGE_RIGHT}:${IMAGE_TOP}:format=auto[v]`
-
-    );
-
-    // ========================================================
-    // VIDEO
-    // ========================================================
-
-    args.push(
-
-        "-map",
-        "[v]",
-
-        "-map",
-        "0:a:0?",
-
-        "-c:v",
-        "libx264",
-
-        "-preset",
-        "veryfast",
-
-        "-tune",
-        "zerolatency",
-
-        "-pix_fmt",
-        "yuv420p",
-
-        "-r",
-        "30",
-
-        "-g",
-        "60",
-
-        "-keyint_min",
-        "60",
-
-        "-b:v",
-        "2500k",
-
-        "-maxrate",
-        "3000k",
-
-        "-bufsize",
-        "6000k"
-
-    );
-
-    // ========================================================
-    // AUDIO
-    // ========================================================
-
-    args.push(
-
-        "-c:a",
-        "aac",
-
-        "-b:a",
-        "128k",
-
-        "-ar",
-        "44100",
-
-        "-ac",
-        "2"
-
-    );
-
-    // ========================================================
-    // FACEBOOK
-    // ========================================================
-
-    args.push(
-
-        "-flvflags",
-        "no_duration_filesize",
-
-        "-f",
-        "flv",
-
-        FACEBOOK_RTMP +
-        streamKey
-
-    );
-
-    return args;
+  };
 }
 
-// ============================================================
-// START STREAM
-// ============================================================
+// =====================================================
+// 🏠 /START
+// =====================================================
 
-async function startStream(
-    chatId,
-    name,
-    key,
-    source,
-    type
-) {
+bot.onText(
+  /\/start/,
+  async msg => {
 
-    name =
-        String(name).trim();
+    await bot.sendMessage(
+      msg.chat.id,
 
-    key =
-        String(key).trim();
+      "🤖 DARK STREAM BOT\n\n" +
+      "اختر العملية من الأزرار:",
+      keyboard()
+    );
+  }
+);
 
-    source =
-        String(source).trim();
+// =====================================================
+// 📊 STATUS COMMAND
+// =====================================================
 
-    // ========================================================
-    // VALIDATION
-    // ========================================================
+bot.onText(
+  /\/status/,
+  async msg => {
 
-    if (
-        !name ||
-        !key ||
-        !source
+    await bot.sendMessage(
+      msg.chat.id,
+      statusText(),
+      keyboard()
+    );
+  }
+);
+
+// =====================================================
+// ⛔ STOP COMMAND
+// =====================================================
+
+bot.onText(
+  /\/stop/,
+  async msg => {
+
+    let count = 0;
+
+    for (
+      const stream of streams.values()
     ) {
 
+      if (stream.running) {
+        stopStream(stream);
+        count++;
+      }
+    }
+
+    await bot.sendMessage(
+      msg.chat.id,
+
+      `⛔ تم إيقاف ${count} بث.`,
+      keyboard()
+    );
+  }
+);
+
+// =====================================================
+// 🔴 SOLO
+// =====================================================
+
+bot.on(
+  "message",
+  async msg => {
+
+    if (!msg.text) {
+      return;
+    }
+
+    if (msg.text === "🔴 SOLO") {
+
+      const stream =
+        streams.get("SOLO");
+
+      if (!stream) {
+
         await bot.sendMessage(
-            chatId,
-            "❌ البيانات ناقصة.",
-            keyboard()
+          msg.chat.id,
+
+          "❌ لا توجد إعدادات SOLO.\n\n" +
+          "استخدم /setsolo أو أرسل الإعدادات من جديد."
         );
 
         return;
+      }
 
-    }
+      // stop existing
+      if (stream.running) {
+        stopStream(stream);
 
-    // ========================================================
-    // DUPLICATE
-    // ========================================================
-
-    if (
-        streams.has(name)
-    ) {
-
-        await bot.sendMessage(
-            chatId,
-
-            `⚠️ البث "${name}" يعمل بالفعل.`,
-
-            keyboard()
+        await new Promise(
+          resolve =>
+            setTimeout(resolve, 1500)
         );
+      }
 
-        return;
+      const ok =
+        await startStream(stream);
+
+      await bot.sendMessage(
+        msg.chat.id,
+
+        ok
+          ? "🟢 تم تشغيل SOLO"
+          : "❌ فشل تشغيل SOLO",
+
+        keyboard()
+      );
     }
+  }
+);
 
-    // ========================================================
-    // IMAGE
-    // ========================================================
+// =====================================================
+// 🔥 GROUP
+// =====================================================
+
+bot.on(
+  "message",
+  async msg => {
 
     if (
-        !fs.existsSync(
-            IMAGE_FILE
-        )
+      !msg.text ||
+      msg.text !== "🔥 GROUP"
     ) {
+      return;
+    }
+
+    if (streams.size === 0) {
+
+      await bot.sendMessage(
+        msg.chat.id,
+        "❌ لا توجد بثوث."
+      );
+
+      return;
+    }
+
+    let started = 0;
+
+    for (
+      const stream of streams.values()
+    ) {
+
+      if (!stream.running) {
 
         const ok =
-            await prepareImage();
+          await startStream(stream);
 
-        if (!ok) {
-
-            await bot.sendMessage(
-                chatId,
-
-                "❌ فشل تحميل الصورة.\n\n" +
-                "تأكد أن IMAGE_URL رابط مباشر للصورة.",
-
-                keyboard()
-            );
-
-            return;
+        if (ok) {
+          started++;
         }
+      }
     }
 
-    // ========================================================
-    // FFMPEG
-    // ========================================================
+    await bot.sendMessage(
+      msg.chat.id,
 
-    const args =
-        buildFFmpegArgs(
-            source,
-            key
-        );
+      `🔥 GROUP\n\n` +
+      `🟢 تم تشغيل: ${started}\n` +
+      `📊 الإجمالي: ${streams.size}`,
 
-    console.log("");
-    console.log(
-        "===================================="
+      keyboard()
     );
+  }
+);
 
-    console.log(
-        `▶️ START: ${name}`
-    );
+// =====================================================
+// 📊 STATUS BUTTON
+// =====================================================
 
-    console.log(
-        `📡 TYPE: ${type}`
-    );
+bot.on(
+  "message",
+  async msg => {
 
-    console.log(
-        `🔗 SOURCE: ${source}`
-    );
-
-    console.log(
-        `🔑 KEY: ${maskKey(key)}`
-    );
-
-    console.log(
-        `🖼️ IMAGE: ENABLED`
-    );
-
-    console.log(
-        "===================================="
-    );
-
-    let process;
-
-    try {
-
-        process =
-            spawn(
-                "ffmpeg",
-                args,
-                {
-                    stdio: [
-                        "ignore",
-                        "pipe",
-                        "pipe"
-                    ]
-                }
-            );
-
-    } catch (error) {
-
-        console.error(
-            "❌ FFmpeg spawn error:",
-            error.message
-        );
-
-        await bot.sendMessage(
-            chatId,
-
-            "❌ تعذر تشغيل FFmpeg:\n\n" +
-            error.message,
-
-            keyboard()
-        );
-
-        return;
+    if (
+      !msg.text ||
+      msg.text !== "📊 الحالة"
+    ) {
+      return;
     }
 
-    // ========================================================
-    // SAVE
-    // ========================================================
-
-    const stream = {
-
-        name,
-
-        key,
-
-        source,
-
-        type,
-
-        process,
-
-        chatId,
-
-        startedAt:
-            Date.now(),
-
-        status:
-            "starting",
-
-        stopping:
-            false,
-
-        restartTimer:
-            null
-
-    };
-
-    streams.set(
-        name,
-        stream
+    await bot.sendMessage(
+      msg.chat.id,
+      statusText(),
+      keyboard()
     );
+  }
+);
 
-    // ========================================================
-    // STDOUT
-    // ========================================================
+// =====================================================
+// ⛔ STOP BUTTON
+// =====================================================
 
-    process.stdout.on(
-        "data",
-        data => {
+bot.on(
+  "message",
+  async msg => {
 
-            const output =
-                data
-                    .toString()
-                    .trim();
+    if (
+      !msg.text ||
+      msg.text !== "⛔ STOP"
+    ) {
+      return;
+    }
 
-            if (output) {
+    let count = 0;
 
-                console.log(
-                    `[FFMPEG ${name}] ${output}`
-                );
+    for (
+      const stream of streams.values()
+    ) {
 
-            }
+      if (stream.running) {
+        stopStream(stream);
+        count++;
+      }
+    }
 
-        }
+    await bot.sendMessage(
+      msg.chat.id,
+
+      `⛔ تم إيقاف ${count} بث.`,
+
+      keyboard()
     );
+  }
+);
 
-    // ========================================================
-    // STDERR
-    //
-    // FFmpeg يكتب المعلومات والأخطاء هنا
-    // ========================================================
+// =====================================================
+// 🔗 SET URL
+// =====================================================
 
-    process.stderr.on(
-        "data",
-        data => {
+bot.onText(
+  /\/seturl (.+)/,
+  async msg => {
 
-            const output =
-                data
-                    .toString()
-                    .trim();
+    const url =
+      msg[1].trim();
 
-            if (output) {
+    process.env.FACEBOOK_URL = url;
 
-                console.log(
-                    `[FFMPEG ${name}] ${output}`
-                );
-
-            }
-
-        }
+    await bot.sendMessage(
+      msg.chat.id,
+      "✅ تم تغيير Facebook RTMPS URL."
     );
+  }
+);
 
-    // ========================================================
-    // SPAWN
-    // ========================================================
+// =====================================================
+// 🔑 SET KEY
+// =====================================================
 
-    process.on(
-        "spawn",
-        async () => {
+bot.onText(
+  /\/setkey (.+)/,
+  async msg => {
 
-            const current =
-                streams.get(name);
+    const key =
+      msg[1].trim();
 
-            if (current) {
-
-                current.status =
-                    "running";
-
-            }
-
-            console.log(
-                `🟢 FFmpeg running: ${name}`
-            );
-
-            try {
-
-                await bot.sendMessage(
-                    chatId,
-
-                    "✅ تم تشغيل البث\n\n" +
-
-                    `📛 ${name}\n` +
-
-                    `📡 ${type}\n` +
-
-                    "🖼️ الصورة: مفعلة ✅\n" +
-
-                    "📍 المكان: أعلى اليمين\n\n" +
-
-                    "🟢 FFmpeg: يعمل",
-
-                    keyboard()
-                );
-
-            } catch {}
-
-        }
-    );
-
-    // ========================================================
-    // ERROR
-    // ========================================================
-
-    process.on(
-        "error",
-        error => {
-
-            console.error(
-                `❌ FFmpeg ERROR [${name}]`,
-                error.message
-            );
-
-            const current =
-                streams.get(name);
-
-            if (current) {
-
-                current.status =
-                    "error";
-
-            }
-
-        }
-    );
-
-    // ========================================================
-    // CLOSE
-    // ========================================================
-
-    process.on(
-        "close",
-        async code => {
-
-            console.log(
-                `🛑 FFmpeg closed: ${name} | code=${code}`
-            );
-
-            const current =
-                streams.get(name);
-
-            if (!current) {
-                return;
-            }
-
-            // Manual stop
-            if (
-                current.stopping
-            ) {
-
-                streams.delete(
-                    name
-                );
-
-                console.log(
-                    `🛑 Stream stopped: ${name}`
-                );
-
-                return;
-            }
-
-            // ==================================================
-            // AUTO RESTART
-            // ==================================================
-
-            console.log(
-                `🔄 إعادة تشغيل ${name} بعد 5 ثوانٍ...`
-            );
-
-            current.status =
-                "restarting";
-
-            current.restartTimer =
-                setTimeout(
-                    async () => {
-
-                        if (
-                            !streams.has(name)
-                        ) {
-
-                            return;
-                        }
-
-                        streams.delete(
-                            name
-                        );
-
-                        await startStream(
-                            chatId,
-                            name,
-                            key,
-                            source,
-                            type
-                        );
-
-                    },
-                    5000
-                );
-
-        }
-    );
-}
-
-// ============================================================
-// STOP STREAM
-// ============================================================
-
-async function stopStream(
-    chatId,
-    name
-) {
-
-    name =
-        String(name).trim();
-
-    const stream =
-        streams.get(name);
+    let stream =
+      streams.get("SOLO");
 
     if (!stream) {
 
-        await bot.sendMessage(
-            chatId,
+      stream = {
+        id: "SOLO",
+        key,
+        source: "",
+        process: null,
+        running: false,
+        restarting: false
+      };
 
-            `❌ البث "${name}" غير موجود.`,
+      streams.set(
+        "SOLO",
+        stream
+      );
 
-            keyboard()
-        );
+    } else {
 
-        return;
-    }
-
-    stream.stopping =
-        true;
-
-    if (
-        stream.restartTimer
-    ) {
-
-        clearTimeout(
-            stream.restartTimer
-        );
-
-    }
-
-    try {
-
-        stream.process.kill(
-            "SIGTERM"
-        );
-
-    } catch {}
-
-    streams.delete(
-        name
-    );
-
-    await bot.sendMessage(
-        chatId,
-
-        `🛑 تم إيقاف البث "${name}".`,
-
-        keyboard()
-    );
-}
-
-// ============================================================
-// STOP ALL
-// ============================================================
-
-async function stopAll(
-    chatId
-) {
-
-    const list =
-        [...streams.values()];
-
-    if (
-        list.length === 0
-    ) {
-
-        await bot.sendMessage(
-            chatId,
-
-            "ℹ️ لا توجد بثوث تعمل.",
-
-            keyboard()
-        );
-
-        return;
-    }
-
-    for (
-        const stream of list
-    ) {
-
-        stream.stopping =
-            true;
-
-        if (
-            stream.restartTimer
-        ) {
-
-            clearTimeout(
-                stream.restartTimer
-            );
-
-        }
-
-        try {
-
-            stream.process.kill(
-                "SIGTERM"
-            );
-
-        } catch {}
-
-        streams.delete(
-            stream.name
-        );
-
+      stream.key = key;
     }
 
     await bot.sendMessage(
-        chatId,
-
-        `🛑 تم إيقاف ${list.length} بثوث.`,
-
-        keyboard()
+      msg.chat.id,
+      "✅ تم حفظ Stream Key."
     );
-}
-
-// ============================================================
-// STATUS
-// ============================================================
-
-async function showStatus(
-    chatId
-) {
-
-    const list =
-        [...streams.values()];
-
-    if (
-        list.length === 0
-    ) {
-
-        await bot.sendMessage(
-            chatId,
-
-            "📊 لا توجد بثوث نشطة.",
-
-            keyboard()
-        );
-
-        return;
-    }
-
-    let text =
-        `📊 البثوث النشطة: ${list.length}\n\n`;
-
-    for (
-        const stream of list
-    ) {
-
-        const seconds =
-            Math.floor(
-                (
-                    Date.now() -
-                    stream.startedAt
-                ) / 1000
-            );
-
-        const minutes =
-            Math.floor(
-                seconds / 60
-            );
-
-        const secs =
-            seconds % 60;
-
-        text +=
-
-            `📛 ${stream.name}\n` +
-
-            `🔑 ${maskKey(stream.key)}\n` +
-
-            `🟢 ${stream.status}\n` +
-
-            `⏱ ${minutes}د ${secs}ث\n` +
-
-            `📡 ${stream.type}\n` +
-
-            `🖼️ الصورة: نعم\n` +
-
-            `🔄 MP4 Loop: ` +
-
-            `${isMP4(stream.source) ? "نعم" : "لا"}\n\n`;
-
-    }
-
-    await bot.sendMessage(
-        chatId,
-        text,
-        keyboard()
-    );
-}
-
-// ============================================================
-// CHECK SOURCE
-// ============================================================
-
-async function checkSource(
-    chatId,
-    source
-) {
-
-    await bot.sendMessage(
-        chatId,
-        "🔎 جاري فحص الرابط..."
-    );
-
-    execFile(
-        "ffprobe",
-
-        [
-            "-v",
-            "error",
-
-            "-show_entries",
-            "stream=codec_type,codec_name",
-
-            "-show_entries",
-            "format=format_name,duration",
-
-            "-of",
-            "json",
-
-            source
-        ],
-
-        {
-            timeout: 30000,
-            maxBuffer: 1024 * 1024
-        },
-
-        async (
-            error,
-            stdout,
-            stderr
-        ) => {
-
-            if (error) {
-
-                await bot.sendMessage(
-                    chatId,
-
-                    "❌ فشل فحص الرابط:\n\n" +
-                    String(
-                        stderr ||
-                        error.message
-                    ).slice(
-                        0,
-                        3000
-                    ),
-
-                    keyboard()
-                );
-
-                return;
-            }
-
-            try {
-
-                const data =
-                    JSON.parse(
-                        stdout
-                    );
-
-                const list =
-                    data.streams || [];
-
-                const video =
-                    list.find(
-                        x =>
-                            x.codec_type ===
-                            "video"
-                    );
-
-                const audio =
-                    list.find(
-                        x =>
-                            x.codec_type ===
-                            "audio"
-                    );
-
-                await bot.sendMessage(
-                    chatId,
-
-                    "✅ الرابط قابل للقراءة\n\n" +
-
-                    `🎥 Video: ${
-                        video?.codec_name ||
-                        "غير موجود"
-                    }\n` +
-
-                    `🔊 Audio: ${
-                        audio?.codec_name ||
-                        "غير موجود"
-                    }\n\n` +
-
-                    `📦 Format: ${
-                        data.format?.format_name ||
-                        "غير معروف"
-                    }`,
-
-                    keyboard()
-                );
-
-            } catch {
-
-                await bot.sendMessage(
-                    chatId,
-
-                    "⚠️ تعذر قراءة نتيجة FFprobe.",
-
-                    keyboard()
-                );
-
-            }
-
-        }
-    );
-}
-
-// ============================================================
-// TELEGRAM MESSAGE
-// ============================================================
-
-bot.on(
-    "message",
-    async message => {
-
-        try {
-
-            if (
-                !message.text
-            ) {
-
-                return;
-            }
-
-            const chatId =
-                message.chat.id;
-
-            const userId =
-                message.from?.id;
-
-            const text =
-                message.text.trim();
-
-            // ==================================================
-            // START
-            // ==================================================
-
-            if (
-                text === "/start"
-            ) {
-
-                sessions.delete(
-                    userId
-                );
-
-                await bot.sendMessage(
-                    chatId,
-
-                    "🤖 DARK STREAM BOT\n\n" +
-                    "اختر العملية:",
-
-                    keyboard()
-                );
-
-                return;
-            }
-
-            // ==================================================
-            // SOLO
-            // ==================================================
-
-            if (
-                text === "🎯 SOLO"
-            ) {
-
-                sessions.set(
-                    userId,
-
-                    {
-                        type: "solo",
-                        step: "name"
-                    }
-                );
-
-                await bot.sendMessage(
-                    chatId,
-
-                    "1️⃣ أرسل اسم البث:"
-                );
-
-                return;
-            }
-
-            // ==================================================
-            // GROUP
-            // ==================================================
-
-            if (
-                text === "🔥 GROUP"
-            ) {
-
-                sessions.set(
-                    userId,
-
-                    {
-                        type: "group",
-                        step: "count"
-                    }
-                );
-
-                await bot.sendMessage(
-                    chatId,
-
-                    "👥 كم عدد البثوث؟\n\n" +
-                    "مثال: 10"
-                );
-
-                return;
-            }
-
-            // ==================================================
-            // STOP
-            // ==================================================
-
-            if (
-                text === "🛑 STOP"
-            ) {
-
-                sessions.set(
-                    userId,
-
-                    {
-                        type: "stop",
-                        step: "name"
-                    }
-                );
-
-                await bot.sendMessage(
-                    chatId,
-
-                    "🛑 أرسل اسم البث لإيقافه:"
-                );
-
-                return;
-            }
-
-            // ==================================================
-            // STATUS
-            // ==================================================
-
-            if (
-                text === "📊 الحالة"
-            ) {
-
-                await showStatus(
-                    chatId
-                );
-
-                return;
-            }
-
-            // ==================================================
-            // CHECK
-            // ==================================================
-
-            if (
-                text === "🔍 فحص الرابط"
-            ) {
-
-                sessions.set(
-                    userId,
-
-                    {
-                        type: "check",
-                        step: "url"
-                    }
-                );
-
-                await bot.sendMessage(
-                    chatId,
-
-                    "🌐 أرسل رابط المصدر:"
-                );
-
-                return;
-            }
-
-            // ==================================================
-            // SESSION
-            // ==================================================
-
-            const session =
-                sessions.get(
-                    userId
-                );
-
-            if (!session) {
-
-                await bot.sendMessage(
-                    chatId,
-
-                    "استخدم /start",
-
-                    keyboard()
-                );
-
-                return;
-            }
-
-            // ==================================================
-            // SOLO
-            // ==================================================
-
-            if (
-                session.type ===
-                "solo"
-            ) {
-
-                if (
-                    session.step ===
-                    "name"
-                ) {
-
-                    session.name =
-                        text;
-
-                    session.step =
-                        "key";
-
-                    await bot.sendMessage(
-                        chatId,
-
-                        "2️⃣ أرسل Facebook Stream Key:"
-                    );
-
-                    return;
-                }
-
-                if (
-                    session.step ===
-                    "key"
-                ) {
-
-                    session.key =
-                        text;
-
-                    session.step =
-                        "url";
-
-                    await bot.sendMessage(
-                        chatId,
-
-                        "3️⃣ أرسل رابط المصدر:"
-                    );
-
-                    return;
-                }
-
-                if (
-                    session.step ===
-                    "url"
-                ) {
-
-                    const name =
-                        session.name;
-
-                    const key =
-                        session.key;
-
-                    sessions.delete(
-                        userId
-                    );
-
-                    await startStream(
-                        chatId,
-                        name,
-                        key,
-                        text,
-                        "SOLO"
-                    );
-
-                    return;
-                }
-            }
-
-            // ==================================================
-            // GROUP
-            // ==================================================
-
-            if (
-                session.type ===
-                "group"
-            ) {
-
-                if (
-                    session.step ===
-                    "count"
-                ) {
-
-                    const count =
-                        Number(text);
-
-                    if (
-                        !Number.isInteger(
-                            count
-                        ) ||
-                        count < 1 ||
-                        count > 50
-                    ) {
-
-                        await bot.sendMessage(
-                            chatId,
-
-                            "❌ أدخل رقمًا بين 1 و50."
-                        );
-
-                        return;
-                    }
-
-                    session.count =
-                        count;
-
-                    session.current =
-                        1;
-
-                    session.step =
-                        "name";
-
-                    await bot.sendMessage(
-                        chatId,
-
-                        `📡 البث 1 من ${count}\n\n` +
-                        "أرسل اسم البث:"
-                    );
-
-                    return;
-                }
-
-                if (
-                    session.step ===
-                    "name"
-                ) {
-
-                    session.name =
-                        text;
-
-                    session.step =
-                        "key";
-
-                    await bot.sendMessage(
-                        chatId,
-
-                        `🔑 البث ${session.current} من ${session.count}\n\n` +
-                        "أرسل Stream Key:"
-                    );
-
-                    return;
-                }
-
-                if (
-                    session.step ===
-                    "key"
-                ) {
-
-                    session.key =
-                        text;
-
-                    session.step =
-                        "url";
-
-                    await bot.sendMessage(
-                        chatId,
-
-                        "🌐 أرسل رابط المصدر:"
-                    );
-
-                    return;
-                }
-
-                if (
-                    session.step ===
-                    "url"
-                ) {
-
-                    await startStream(
-
-                        chatId,
-
-                        session.name,
-
-                        session.key,
-
-                        text,
-
-                        "GROUP"
-
-                    );
-
-                    if (
-                        session.current >=
-                        session.count
-                    ) {
-
-                        sessions.delete(
-                            userId
-                        );
-
-                        await bot.sendMessage(
-                            chatId,
-
-                            `✅ تم تشغيل/إعداد ${session.count} بث.`,
-
-                            keyboard()
-                        );
-
-                        return;
-                    }
-
-                    session.current++;
-
-                    session.step =
-                        "name";
-
-                    await bot.sendMessage(
-                        chatId,
-
-                        `📡 البث ${session.current} من ${session.count}\n\n` +
-                        "أرسل اسم البث:"
-                    );
-
-                    return;
-                }
-            }
-
-            // ==================================================
-            // STOP SESSION
-            // ==================================================
-
-            if (
-                session.type ===
-                "stop"
-            ) {
-
-                sessions.delete(
-                    userId
-                );
-
-                await stopStream(
-                    chatId,
-                    text
-                );
-
-                return;
-            }
-
-            // ==================================================
-            // CHECK SESSION
-            // ==================================================
-
-            if (
-                session.type ===
-                "check"
-            ) {
-
-                sessions.delete(
-                    userId
-                );
-
-                await checkSource(
-                    chatId,
-                    text
-                );
-
-                return;
-            }
-
-        } catch (error) {
-
-            console.error(
-                "❌ BOT ERROR:",
-                error
-            );
-
-            try {
-
-                await bot.sendMessage(
-                    message.chat.id,
-
-                    "❌ حدث خطأ:\n\n" +
-                    error.message,
-
-                    keyboard()
-                );
-
-            } catch {}
-
-        }
-
-    }
+  }
 );
 
-// ============================================================
-// TELEGRAM POLLING ERROR
-// ============================================================
+// =====================================================
+// 🎬 SET VIDEO / SOURCE
+// =====================================================
 
-bot.on(
-    "polling_error",
-    error => {
+bot.onText(
+  /\/setvideo (.+)/,
+  async msg => {
 
-        console.error(
-            "❌ Telegram polling error:",
-            error?.message ||
-            error
-        );
+    const source =
+      msg[1].trim();
 
+    let stream =
+      streams.get("SOLO");
+
+    if (!stream) {
+
+      stream = {
+        id: "SOLO",
+        key: "",
+        source,
+        process: null,
+        running: false,
+        restarting: false
+      };
+
+      streams.set(
+        "SOLO",
+        stream
+      );
+
+    } else {
+
+      stream.source = source;
     }
+
+    await bot.sendMessage(
+      msg.chat.id,
+      "✅ تم حفظ مصدر الفيديو."
+    );
+  }
 );
 
-// ============================================================
-// SHUTDOWN
-// ============================================================
+// =====================================================
+// 🔗 CHANGE URL BUTTON
+// =====================================================
 
-async function shutdown() {
+bot.on(
+  "message",
+  async msg => {
+
+    if (
+      !msg.text ||
+      msg.text !== "🔗 تغيير الرابط"
+    ) {
+      return;
+    }
+
+    await bot.sendMessage(
+      msg.chat.id,
+
+      "أرسل الرابط بهذا الشكل:\n\n" +
+      "/seturl rtmps://live-api-s.facebook.com:443/rtmp/"
+    );
+  }
+);
+
+// =====================================================
+// 🔑 CHANGE KEY BUTTON
+// =====================================================
+
+bot.on(
+  "message",
+  async msg => {
+
+    if (
+      !msg.text ||
+      msg.text !== "🔑 تغيير المفتاح"
+    ) {
+      return;
+    }
+
+    await bot.sendMessage(
+      msg.chat.id,
+
+      "أرسل المفتاح بهذا الشكل:\n\n" +
+      "/setkey YOUR_STREAM_KEY"
+    );
+  }
+);
+
+// =====================================================
+// 🎬 CHANGE SOURCE BUTTON
+// =====================================================
+
+bot.on(
+  "message",
+  async msg => {
+
+    if (
+      !msg.text ||
+      msg.text !== "🎬 تغيير المصدر"
+    ) {
+      return;
+    }
+
+    await bot.sendMessage(
+      msg.chat.id,
+
+      "أرسل رابط M3U8 أو TS أو MP4:\n\n" +
+      "/setvideo https://example.com/video.mp4"
+    );
+  }
+);
+
+// =====================================================
+// ❌ POLLING ERRORS
+// =====================================================
+
+bot.on(
+  "polling_error",
+  error => {
+
+    console.error(
+      "Telegram polling error:",
+      error.message
+    );
+  }
+);
+
+// =====================================================
+// 🛑 PROCESS EXIT
+// =====================================================
+
+process.on(
+  "SIGTERM",
+  () => {
 
     console.log(
-        "🛑 إيقاف البوت..."
+      "🛑 Shutting down..."
     );
-
-    try {
-
-        await bot.stopPolling();
-
-    } catch {}
 
     for (
-        const stream of streams.values()
+      const stream of streams.values()
     ) {
 
-        stream.stopping =
-            true;
+      if (stream.process) {
 
         try {
-
-            stream.process.kill(
-                "SIGTERM"
-            );
-
+          stream.process.kill(
+            "SIGTERM"
+          );
         } catch {}
-
+      }
     }
 
-    streams.clear();
+    bot.stopPolling();
 
     process.exit(0);
-}
-
-process.on(
-    "SIGTERM",
-    shutdown
+  }
 );
 
 process.on(
-    "SIGINT",
-    shutdown
+  "SIGINT",
+  () => {
+
+    for (
+      const stream of streams.values()
+    ) {
+
+      if (stream.process) {
+
+        try {
+          stream.process.kill(
+            "SIGTERM"
+          );
+        } catch {}
+      }
+    }
+
+    bot.stopPolling();
+
+    process.exit(0);
+  }
 );
 
-// ============================================================
-// START IMAGE DOWNLOAD
-// ============================================================
-
-prepareImage()
-    .then(
-        ok => {
-
-            if (ok) {
-
-                console.log(
-                    "🖼️ صورة البث جاهزة ✅"
-                );
-
-            } else {
-
-                console.log(
-                    "⚠️ صورة البث غير جاهزة"
-                );
-
-            }
-
-        }
-    );
+console.log(
+  "✅ Bot is ready."
+);
