@@ -12,7 +12,7 @@ import fs from "fs";
 // ضع توكن Telegram هنا
 // ======================================================
 
-const TOKEN = "8938418856:AAHmkAy9CWRzuHmZc4b5bUmqSSZUGSbwUN4";
+const TOKEN = "8774499504:AAGn4dXL4d4wDdYxz8C8NvzkCvg_pYTFKAM";
 
 // ======================================================
 // Facebook RTMPS
@@ -41,7 +41,10 @@ const IMAGE_TOP = 25;
 // التحقق من التوكن
 // ======================================================
 
-if (!TOKEN || TOKEN === "YOUR_BOT_TOKEN_HERE") {
+if (
+    !TOKEN ||
+    TOKEN === "PUT_YOUR_NEW_BOT_TOKEN_HERE"
+) {
     console.error("❌ ضع توكن Telegram داخل TOKEN");
     process.exit(1);
 }
@@ -635,6 +638,26 @@ async function startStream(
         `▶️ Starting stream: ${name}`
     );
 
+    console.log(
+        `🌐 Source: ${sourceUrl}`
+    );
+
+    console.log(
+        `📡 Target: Facebook RTMPS`
+    );
+
+    console.log(
+        `🖼️ Image: ${IMAGE_URL}`
+    );
+
+    console.log(
+        `📐 Image size: ${IMAGE_WIDTH}px`
+    );
+
+    console.log(
+        `📍 Image position: right=${IMAGE_RIGHT}px top=${IMAGE_TOP}px`
+    );
+
     // ==================================================
     // تشغيل FFmpeg
     // ==================================================
@@ -650,7 +673,7 @@ async function startStream(
                 {
                     stdio: [
                         "ignore",
-                        "ignore",
+                        "pipe",
                         "pipe"
                     ]
                 }
@@ -658,11 +681,18 @@ async function startStream(
 
     } catch (error) {
 
+        console.error(
+            `❌ FFmpeg spawn exception ${name}:`,
+            error
+        );
+
         await bot.sendMessage(
             chatId,
 
-            `❌ تعذر تشغيل FFmpeg:\n\n` +
-            error.message,
+            `❌ تعذر تشغيل FFmpeg\n\n` +
+            `📛 ${name}\n\n` +
+            `🔴 الخطأ الحقيقي:\n` +
+            `${error.message}`,
 
             mainKeyboard()
         );
@@ -700,8 +730,72 @@ async function startStream(
 
         isMp4,
 
-        probe
+        probe,
+
+        ffmpegError:
+            ""
+
     };
+
+    // ==================================================
+    // استقبال STDERR الحقيقي من FFmpeg
+    // ==================================================
+
+    let ffmpegOutput = "";
+
+    if (process.stderr) {
+
+        process.stderr.on(
+            "data",
+            chunk => {
+
+                const output =
+                    String(chunk);
+
+                ffmpegOutput += output;
+
+                // الاحتفاظ بآخر 20000 حرف فقط
+                if (
+                    ffmpegOutput.length >
+                    20000
+                ) {
+
+                    ffmpegOutput =
+                        ffmpegOutput.slice(
+                            -20000
+                        );
+                }
+
+                console.error(
+                    `[FFMPEG ${name}] ${output.trim()}`
+                );
+
+                if (streams[name]) {
+
+                    streams[name].ffmpegError =
+                        ffmpegOutput;
+                }
+            }
+        );
+    }
+
+    // ==================================================
+    // استقبال stdout
+    // ==================================================
+
+    if (process.stdout) {
+
+        process.stdout.on(
+            "data",
+            chunk => {
+
+                console.log(
+                    `[FFMPEG-OUT ${name}] ${String(chunk).trim()}`
+                );
+
+            }
+        );
+    }
 
     // ==================================================
     // سجل FFmpeg
@@ -728,9 +822,12 @@ async function startStream(
                 }
             );
 
-        process.stderr.pipe(
-            logStream
-        );
+        if (process.stderr) {
+
+            process.stderr.pipe(
+                logStream
+            );
+        }
 
     } catch (error) {
 
@@ -748,6 +845,10 @@ async function startStream(
         "spawn",
         async () => {
 
+            console.log(
+                `🟢 FFmpeg process started: ${name}`
+            );
+
             if (streams[name]) {
 
                 streams[name].status =
@@ -759,7 +860,7 @@ async function startStream(
                 await bot.sendMessage(
                     chatId,
 
-                    `✅ تم تشغيل البث\n\n` +
+                    `✅ تم تشغيل FFmpeg\n\n` +
 
                     `📛 الاسم:\n${name}\n\n` +
 
@@ -780,9 +881,10 @@ async function startStream(
 
                     `📐 الحجم:\n170px عرض\n\n` +
 
-                    `📍 الموضع:\n25px من اليمين\n25px من الأعلى\n\n` +
+                    `📍 الموضع:\n25px من اليمين\n` +
+                    `25px من الأعلى\n\n` +
 
-                    `🟢 الحالة:\nيعمل`,
+                    `🟢 FFmpeg:\nيعمل`,
 
                     mainKeyboard()
                 );
@@ -800,33 +902,35 @@ async function startStream(
         async error => {
 
             console.error(
-                `FFmpeg error ${name}:`,
+                `❌ FFmpeg ERROR ${name}:`,
                 error
             );
 
-            const stream =
-                streams[name];
+            if (streams[name]) {
 
-            if (
-                stream &&
-                !stream.manualStop
-            ) {
-
-                delete streams[name];
-
-                try {
-
-                    await bot.sendMessage(
-                        chatId,
-
-                        `❌ حدث خطأ في بث "${name}"\n\n` +
-                        error.message,
-
-                        mainKeyboard()
-                    );
-
-                } catch {}
+                streams[name].status =
+                    "error";
             }
+
+            try {
+
+                await bot.sendMessage(
+                    chatId,
+
+                    `❌ خطأ في تشغيل FFmpeg\n\n` +
+
+                    `📛 البث:\n${name}\n\n` +
+
+                    `🔴 الخطأ:\n` +
+                    `${error.message}\n\n` +
+
+                    `📄 FFmpeg:\n` +
+                    `${ffmpegOutput.slice(-5000)}`,
+
+                    mainKeyboard()
+                );
+
+            } catch {}
         }
     );
 
@@ -839,7 +943,7 @@ async function startStream(
         async code => {
 
             console.log(
-                `FFmpeg stopped: ${name}, code=${code}`
+                `🛑 FFmpeg stopped: ${name}, code=${code}`
             );
 
             if (logStream) {
@@ -864,17 +968,54 @@ async function startStream(
             delete streams[name];
 
             if (manualStop) {
+
+                console.log(
+                    `🛑 Manual stop: ${name}`
+                );
+
                 return;
             }
+
+            // ==================================================
+            // الخطأ الحقيقي
+            // ==================================================
+
+            const realError =
+                ffmpegOutput
+                    .trim()
+                    .slice(-7000);
+
+            console.error(
+                `❌ FFmpeg exited unexpectedly: ${name}`
+            );
+
+            console.error(
+                `🔴 Exit code: ${code}`
+            );
+
+            console.error(
+                realError ||
+                "لا يوجد STDERR من FFmpeg"
+            );
 
             try {
 
                 await bot.sendMessage(
                     chatId,
 
-                    `🛑 توقف البث "${name}"\n\n` +
-                    `كود FFmpeg: ${code ?? "غير معروف"}\n\n` +
-                    `🔗 المصدر:\n${sourceUrl}`,
+                    `❌ توقف FFmpeg بشكل غير متوقع\n\n` +
+
+                    `📛 البث:\n${name}\n\n` +
+
+                    `🔴 Exit code:\n` +
+                    `${code ?? "غير معروف"}\n\n` +
+
+                    `🔗 المصدر:\n` +
+                    `${sourceUrl}\n\n` +
+
+                    `📄 الخطأ الحقيقي من FFmpeg:\n\n` +
+
+                    `${realError || "FFmpeg لم يعطِ رسالة خطأ."}`,
 
                     mainKeyboard()
                 );
@@ -1047,11 +1188,6 @@ async function startGroupStreams(
 
     // ==================================================
     // ⭐ التشغيل المتزامن
-    //
-    // مهم:
-    // لا نستخدم await بين البثوث.
-    // نقوم بإنشاء جميع عمليات FFmpeg بسرعة
-    // ثم ننتظر نتائج التشغيل.
     // ==================================================
 
     const startPromises =
